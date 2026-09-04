@@ -21,6 +21,9 @@ class ModelType(str, Enum):
     SVM = "svm"
     KNN = "knn"
     NEURAL_NETWORK = "neural_network"
+    # Retained only so existing rows created before this type was retired can
+    # still be read back (the Postgres enum can't drop the value either).
+    # Not offered for new/updated models - see the validators below.
     OTHER = "other"
 
 
@@ -32,6 +35,14 @@ class MLModelBase(BaseModel):
     pkl_file_id: Optional[str] = Field(None, max_length=500, description="File manager ID for the uploaded .pkl file")
     features: Optional[list[str]] = Field(None, description="List of feature names used by the model")
     target_variable: Optional[str] = Field(None, max_length=255, description="The prediction target variable")
+
+
+def _reject_other(v: Optional[ModelType]) -> Optional[ModelType]:
+    if v is ModelType.OTHER:
+        raise ValueError(
+            "Model type 'other' is no longer supported; choose a specific algorithm."
+        )
+    return v
 
 
 class MLModelCreate(MLModelBase):
@@ -48,9 +59,19 @@ class MLModelCreate(MLModelBase):
             raise ValueError('Features list must not be empty')
         return v
 
+    @field_validator('model_type')
+    @classmethod
+    def validate_model_type_not_other(cls, v):
+        return _reject_other(v)
+
 
 class MLModelUpdate(MLModelBase):
     """Update schema - all fields are optional"""
+
+    @field_validator('model_type')
+    @classmethod
+    def validate_model_type_not_other(cls, v):
+        return _reject_other(v)
 
 
 class MLModelRead(MLModelBase):

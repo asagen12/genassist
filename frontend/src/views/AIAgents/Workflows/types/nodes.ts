@@ -458,6 +458,8 @@ export interface TrainModelNodeData extends BaseNodeData {
     | "linear_regression"
     | "logistic_regression"
     | "neural_network"
+    // No longer selectable (retired option) - kept so nodes saved before the
+    // removal still type-check and render their stored value.
     | "other";
   targetColumn: string; // Target variable column name
   featureColumns: string[]; // Feature column names

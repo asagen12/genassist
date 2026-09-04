@@ -25,6 +25,9 @@ class ModelType(str, enum.Enum):
     SVM = "svm"
     KNN = "knn"
     NEURAL_NETWORK = "neural_network"
+    # Retained only so rows created before this type was retired still
+    # deserialize (the Postgres enum type can't drop the value). New/updated
+    # models are blocked from using it - see app.schemas.ml_model.
     OTHER = "other"
 
 

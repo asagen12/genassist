@@ -302,7 +302,11 @@ export const TrainModelDialog: React.FC<TrainModelDialogProps> = (props) => {
                 <SelectItem value="neural_network">
                   Neural Network
                 </SelectItem>
-                <SelectItem value="other">Other</SelectItem>
+                {values.modelType === "other" && (
+                  <SelectItem value="other" disabled>
+                    Other (no longer supported - choose a new type)
+                  </SelectItem>
+                )}
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
