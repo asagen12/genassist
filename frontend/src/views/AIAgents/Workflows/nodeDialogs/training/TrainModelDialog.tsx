@@ -31,7 +31,7 @@ import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { NodeConfigPanel } from "../../components/NodeConfigPanel";
 import { BaseNodeDialogProps } from "../base";
 import { DraggableInput } from "../../components/custom/DraggableInput";
-import { analyzeCSV, CSVAnalysisResult } from "@/services/mlModels";
+import { analyzeCSV } from "@/services/mlModels";
 import { CSVAnalysisDisplay } from "./components/CSVAnalysisDisplay";
 import { OutlierHandler } from "./components/OutlierHandler";
 import { CategoricalEncodingHandler } from "./components/CategoricalEncodingHandler";
@@ -277,12 +277,6 @@ export const TrainModelDialog: React.FC<TrainModelDialogProps> = (props) => {
 
   const addFeatureColumn = () => {
     setField("featureColumns", [...values.featureColumns, ""]);
-  };
-
-  const updateFeatureColumn = (index: number, value: string) => {
-    const newColumns = [...values.featureColumns];
-    newColumns[index] = value;
-    setField("featureColumns", newColumns);
   };
 
   const removeFeatureColumn = (index: number) => {
