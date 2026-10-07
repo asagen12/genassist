@@ -54,6 +54,12 @@ export const defaultsForStrategy = (
   strategy: FeatureEngineeringStrategy
 ): Partial<FeatureEngineeringItem> => {
   switch (strategy) {
+    // Saved explicitly: the form shows these values, so they must be what's
+    // stored too (they used to be shown but not saved, failing training).
+    case "bin_numeric":
+      return { numBins: 5 };
+    case "polynomial":
+      return { polynomialDegree: 2 };
     case "log_transform":
       return { replaceSourceColumns: false };
     case "quantile_transform":

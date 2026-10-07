@@ -70,6 +70,15 @@ _AUTO_NAME_PREFIXES = {
 }
 
 
+# Defaults the Train Model dialog shows for Bin Numeric / Polynomial.
+_DEFAULT_NUM_BINS = 5
+_DEFAULT_POLYNOMIAL_DEGREE = 2
+
+
+def _is_whole_number_at_least(value: Any, minimum: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
 def _feature_ref(item: Dict[str, Any], index: int) -> str:
     """How messages refer to a feature: its name, or its position in the
     Train Model dialog ("#2" = Feature #2) when it has no name."""
@@ -475,10 +484,18 @@ class TrainModelNode(BaseNode):
                         error_key=ErrorKey.INTERNAL_ERROR,
                         error_detail=f"Feature engineering {ref} has strategy 'custom_expression' but no expression",
                     )
-                if strategy == "bin_numeric" and (not item.get("binColumn") or not item.get("numBins")):
+                # numBins / polynomialDegree fall back to the defaults the dialog
+                # shows (5 bins, degree 2): the dialog used to display them
+                # without saving them, so features saved that way failed here.
+                if strategy == "bin_numeric" and not item.get("binColumn"):
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
-                        error_detail=f"Feature engineering {ref} has strategy 'bin_numeric' but is missing binColumn or numBins",
+                        error_detail=f"Feature engineering {ref} (Bin Numeric): choose a column to bin",
+                    )
+                if strategy == "bin_numeric" and not _is_whole_number_at_least(item.get("numBins", _DEFAULT_NUM_BINS), 2):
+                    raise AppException(
+                        error_key=ErrorKey.INTERNAL_ERROR,
+                        error_detail=f"Feature engineering {ref} (Bin Numeric): number of bins must be a whole number of 2 or more - got {item.get('numBins')!r}",
                     )
                 if strategy in ("normalize", "standardize") and not item.get("sourceColumns"):
                     raise AppException(
@@ -487,10 +504,15 @@ class TrainModelNode(BaseNode):
                     )
                 if strategy in ml_utils.COLUMN_TRANSFORM_STRATEGY_LABELS:
                     self._validate_column_transform_config(item, index)
-                if strategy == "polynomial" and (not item.get("polynomialColumns") or not item.get("polynomialDegree")):
+                if strategy == "polynomial" and not item.get("polynomialColumns"):
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
-                        error_detail=f"Feature engineering {ref} has strategy 'polynomial' but is missing polynomialColumns or polynomialDegree",
+                        error_detail=f"Feature engineering {ref} (Polynomial): choose at least one column",
+                    )
+                if strategy == "polynomial" and not _is_whole_number_at_least(item.get("polynomialDegree", _DEFAULT_POLYNOMIAL_DEGREE), 2):
+                    raise AppException(
+                        error_key=ErrorKey.INTERNAL_ERROR,
+                        error_detail=f"Feature engineering {ref} (Polynomial): degree must be a whole number of 2 or more - got {item.get('polynomialDegree')!r}",
                     )
 
             if target_transform is not None:
@@ -1358,7 +1380,7 @@ class TrainModelNode(BaseNode):
 
             elif strategy == "bin_numeric":
                 bin_column = item.get("binColumn")
-                num_bins = item.get("numBins")
+                num_bins = item.get("numBins") or _DEFAULT_NUM_BINS
                 if bin_column not in X_train.columns or not pd.api.types.is_numeric_dtype(X_train[bin_column]):
                     logger.warning(f"Skipping bin_numeric for '{new_col}': column '{bin_column}' not found or not numeric")
                     continue
@@ -1428,7 +1450,7 @@ class TrainModelNode(BaseNode):
                 if not poly_columns:
                     logger.warning(f"Skipping polynomial for '{new_col}': no valid numeric polynomialColumns")
                     continue
-                degree = item.get("polynomialDegree", 2)
+                degree = item.get("polynomialDegree") or _DEFAULT_POLYNOMIAL_DEGREE
                 poly = PolynomialFeatures(degree=degree, include_bias=False)
                 train_poly = poly.fit_transform(X_train[poly_columns])
                 poly_names = poly.get_feature_names_out(poly_columns).tolist()

@@ -52,6 +52,9 @@ describe("feature engineering strategies", () => {
       replaceSourceColumns: true,
     });
     expect(defaultsForStrategy("custom_expression")).toEqual({});
+    // Shown in the form, so saved too (they used to be shown but not saved).
+    expect(defaultsForStrategy("polynomial")).toEqual({ polynomialDegree: 2 });
+    expect(defaultsForStrategy("bin_numeric")).toEqual({ numBins: 5 });
     expect(["log_transform", "quantile_transform", "power_transform", "pca"].every((s) =>
       isColumnTransformStrategy(s as never)
     )).toBe(true);

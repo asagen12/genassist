@@ -172,3 +172,39 @@ async def test_unnamed_features_train_end_to_end(tmp_path):
     with open(result["model_file_path"], "rb") as f:
         metadata = pickle.load(f)["metadata"]
     assert {"log_price", "poly_year month", "ratio"} <= set(metadata["model_input_columns"])
+
+
+class TestShownDefaultsAreUsed:
+    """The dialog shows degree 2 / 5 bins but used not to save them, so a
+    Polynomial or Bin Numeric feature added without touching those fields
+    failed training ("missing polynomialColumns or polynomialDegree")."""
+
+    @pytest.mark.asyncio
+    async def test_polynomial_without_a_degree_trains_with_degree_2(self, tmp_path):
+        result = await _train(tmp_path, [{"strategy": "polynomial", "polynomialColumns": ["year", "month"]}])
+        with open(result["model_file_path"], "rb") as f:
+            cols = pickle.load(f)["metadata"]["model_input_columns"]
+        assert {"poly_year^2", "poly_year month", "poly_month^2"} <= set(cols)
+        assert not any(c.endswith("^3") for c in cols)
+
+    @pytest.mark.asyncio
+    async def test_bin_numeric_without_a_bin_count_uses_5_bins(self, tmp_path):
+        result = await _train(tmp_path, [{"strategy": "bin_numeric", "binColumn": "price"}])
+        with open(result["model_file_path"], "rb") as f:
+            steps = pickle.load(f)["metadata"]["feature_engineering_steps"]
+        assert len(steps[0]["bin_edges"]) == 6  # 5 bins
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "feature, message",
+        [
+            ({"strategy": "polynomial", "polynomialColumns": ["year"], "polynomialDegree": 1}, "degree must be a whole number of 2 or more"),
+            ({"strategy": "polynomial"}, "(Polynomial): choose at least one column"),
+            ({"strategy": "bin_numeric", "binColumn": "price", "numBins": 1}, "number of bins must be a whole number of 2 or more"),
+            ({"strategy": "bin_numeric"}, "(Bin Numeric): choose a column to bin"),
+        ],
+    )
+    async def test_invalid_settings_fail_clearly(self, tmp_path, feature, message):
+        with pytest.raises(AppException) as exc_info:
+            await _train(tmp_path, [feature])
+        assert message in exc_info.value.error_detail
