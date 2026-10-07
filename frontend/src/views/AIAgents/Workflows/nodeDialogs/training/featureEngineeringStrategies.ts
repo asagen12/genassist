@@ -67,14 +67,6 @@ export const defaultsForStrategy = (
   }
 };
 
-/** What the feature's output column(s) will be called, for the hint under its settings. */
-export const outputColumnsHint = (feature: FeatureEngineeringItem): string => {
-  const name = feature.newColumnName || "<name>";
-  const sources = feature.sourceColumns || [];
-  if (feature.strategy === "pca") return `Creates ${name}_1, ${name}_2, ...`;
-  if (sources.length <= 1) return `Creates ${name}`;
-  return `Creates ${sources.map((c) => `${name}_${c}`).join(", ")}`;
-};
 
 const RETIRED_FEATURE_STRATEGY_LABELS: Partial<Record<FeatureEngineeringStrategy, string>> = {
   normalize: "Normalize (retired)",

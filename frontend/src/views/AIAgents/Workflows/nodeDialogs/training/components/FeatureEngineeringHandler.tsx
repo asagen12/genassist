@@ -21,10 +21,10 @@ import {
   defaultsForStrategy,
   isColumnTransformStrategy,
   isRetiredFeatureStrategy,
-  outputColumnsHint,
   strategyOptionsFor,
 } from "../featureEngineeringStrategies";
 import { Switch } from "@/components/switch";
+import { describeOutputs, planFeatureColumns } from "../featureColumnNames";
 import { Plus, X } from "lucide-react";
 
 interface FeatureEngineeringHandlerProps {
@@ -34,11 +34,14 @@ interface FeatureEngineeringHandlerProps {
   // The target column: never offered as a feature input (it's what the model
   // predicts - using it to build a feature would leak the answer).
   targetColumn?: string;
+  // The model's feature columns - what feature engineering starts from (and
+  // what automatic names must not clash with).
+  featureColumns?: string[];
 }
 
 export const FeatureEngineeringHandler: React.FC<
   FeatureEngineeringHandlerProps
-> = ({ config, onChange, analysisResult, targetColumn }) => {
+> = ({ config, onChange, analysisResult, targetColumn, featureColumns }) => {
   const [features, setFeatures] = useState<FeatureEngineeringItem[]>(
     config?.features || []
   );
@@ -95,18 +98,25 @@ export const FeatureEngineeringHandler: React.FC<
     (col) => col !== targetColumn
   );
 
-  // Column transforms (log/quantile/power/PCA) take numeric columns only: the
-  // analysis' numeric columns, plus the output of earlier features (features
-  // run in order, so a later one can use an earlier one's column).
+  // Each feature's output columns, worked out as training does (automatic
+  // names included) - for the "Creates ..." line and the column pickers.
+  const startColumns = featureColumns?.length ? featureColumns : availableColumns;
+  const plan = planFeatureColumns(features, startColumns);
+
+  // Features take numeric columns: the data's numeric columns plus earlier
+  // features' outputs (features run in order, so a later one can use an
+  // earlier one's column) - minus any an earlier feature replaced.
   const numericColumnsFor = (featureIndex: number): string[] => {
-    const numeric = (analysisResult?.columns_info || [])
-      .filter((col) => col.type === "numeric" && col.name !== targetColumn)
-      .map((col) => col.name);
-    const earlier = features
-      .slice(0, featureIndex)
-      .map((f) => f.newColumnName)
-      .filter((name) => name && !numeric.includes(name));
-    return [...(numeric.length ? numeric : availableColumns), ...earlier];
+    const numeric = new Set(
+      (analysisResult?.columns_info || [])
+        .filter((col) => col.type === "numeric" && col.name !== targetColumn)
+        .map((col) => col.name)
+    );
+    const generated = new Set(plan.slice(0, featureIndex).flatMap((p) => p.outputs));
+    const before = plan[featureIndex]?.before ?? startColumns;
+    return before.filter(
+      (col) => col !== targetColumn && (generated.has(col) || numeric.has(col) || numeric.size === 0)
+    );
   };
 
   const toggleSourceColumn = (feature: FeatureEngineeringItem, col: string, checked: boolean) => {
@@ -167,19 +177,24 @@ export const FeatureEngineeringHandler: React.FC<
                       </Button>
                     </div>
                     <div className="space-y-2">
-                      <div>
-                        <Label className="text-xs">New Column Name</Label>
-                        <RichInput
-                          value={feature.newColumnName}
-                          onChange={(e) =>
-                            handleFeatureChange(feature.id, {
-                              newColumnName: e.target.value,
-                            })
-                          }
-                          placeholder="e.g., feature_sum"
-                          className="h-8 text-xs"
-                        />
-                      </div>
+                      {feature.strategy === "custom_expression" && (
+                        // Only a formula needs a name; every other strategy
+                        // names its columns automatically (see the "Creates"
+                        // line below).
+                        <div>
+                          <Label className="text-xs">New Column Name *</Label>
+                          <RichInput
+                            value={feature.newColumnName}
+                            onChange={(e) =>
+                              handleFeatureChange(feature.id, {
+                                newColumnName: e.target.value,
+                              })
+                            }
+                            placeholder="e.g., revenue"
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      )}
                       <div>
                         <Label className="text-xs">Strategy</Label>
                         <Select
@@ -189,6 +204,9 @@ export const FeatureEngineeringHandler: React.FC<
                               strategy: value as FeatureEngineeringStrategy,
                               // Start the new strategy from valid settings.
                               ...defaultsForStrategy(value as FeatureEngineeringStrategy),
+                              // Other strategies name their columns
+                              // automatically; only a formula keeps a name.
+                              ...(value !== "custom_expression" && { newColumnName: "" }),
                             })
                           }
                         >
@@ -258,7 +276,7 @@ export const FeatureEngineeringHandler: React.FC<
                                 <SelectValue placeholder="Select column" />
                               </SelectTrigger>
                               <SelectContent>
-                                {availableColumns.map((col) => (
+                                {numericColumnsFor(index).map((col) => (
                                   <SelectItem key={col} value={col}>
                                     {col}
                                   </SelectItem>
@@ -342,7 +360,7 @@ export const FeatureEngineeringHandler: React.FC<
                               Select columns for polynomial features
                             </p>
                             <div className="space-y-1 max-h-32 overflow-y-auto border rounded p-2">
-                              {availableColumns.map((col) => (
+                              {numericColumnsFor(index).map((col) => (
                                 <label
                                   key={col}
                                   className="flex items-center space-x-2 text-xs"
@@ -501,10 +519,13 @@ export const FeatureEngineeringHandler: React.FC<
                             </Label>
                           </div>
                           <p className="text-xs text-muted-foreground">
-                            {outputColumnsHint(feature)}. Fit on the training split only.
+                            Fit on the training split only.
                           </p>
                         </>
                       )}
+                      <p className="text-xs font-medium text-muted-foreground" data-testid="feature-outputs">
+                        {describeOutputs(plan[index])}
+                      </p>
                     </div>
                   </div>
                 ))}

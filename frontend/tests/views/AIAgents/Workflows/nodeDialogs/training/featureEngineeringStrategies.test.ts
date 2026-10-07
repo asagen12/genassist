@@ -4,7 +4,6 @@ import {
   defaultsForStrategy,
   isColumnTransformStrategy,
   isRetiredFeatureStrategy,
-  outputColumnsHint,
   strategyOptionsFor,
 } from "@/views/AIAgents/Workflows/nodeDialogs/training/featureEngineeringStrategies";
 
@@ -57,14 +56,5 @@ describe("feature engineering strategies", () => {
       isColumnTransformStrategy(s as never)
     )).toBe(true);
     expect(isColumnTransformStrategy("polynomial")).toBe(false);
-  });
-
-  it("describes the output column names", () => {
-    const base = { id: "f", newColumnName: "t" };
-    expect(outputColumnsHint({ ...base, strategy: "log_transform", sourceColumns: ["a"] })).toBe("Creates t");
-    expect(outputColumnsHint({ ...base, strategy: "log_transform", sourceColumns: ["a", "b"] })).toBe(
-      "Creates t_a, t_b"
-    );
-    expect(outputColumnsHint({ ...base, strategy: "pca", sourceColumns: ["a", "b"] })).toBe("Creates t_1, t_2, ...");
   });
 });

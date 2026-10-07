@@ -55,6 +55,47 @@ logger = logging.getLogger(__name__)
 # with them.
 _RETIRED_FE_STRATEGIES = ("normalize", "standardize")
 
+# Prefix of the automatic column names a feature gets when it has no
+# newColumnName - only Custom Expression requires a name, since a formula has
+# no natural one. Bin Numeric is named after its column instead
+# (<column>_bin).
+_AUTO_NAME_PREFIXES = {
+    "polynomial": "poly",
+    "log_transform": "log",
+    "quantile_transform": "quantile",
+    "power_transform": "power",
+    "pca": "pca",
+    "normalize": "normalized",
+    "standardize": "standardized",
+}
+
+
+def _feature_ref(item: Dict[str, Any], index: int) -> str:
+    """How messages refer to a feature: its name, or its position in the
+    Train Model dialog ("#2" = Feature #2) when it has no name."""
+    name = item.get("newColumnName")
+    return f"'{name}'" if name else f"#{index + 1}"
+
+
+def _first_free_name(candidates, make_names, taken) -> str:
+    """The first candidate whose output column names don't clash with `taken`.
+
+    Automatic names must never collide with an existing column or an earlier
+    feature's output - with no name field, the user couldn't fix a clash -
+    so a clash moves on to the next candidate (log -> log2 -> log3 ...).
+    """
+    for candidate in candidates:
+        if not set(make_names(candidate)) & set(taken):
+            return candidate
+    raise AppException(error_key=ErrorKey.INTERNAL_ERROR, error_detail="Could not find a free feature column name")
+
+
+def _numbered(base: str, separator: str = ""):
+    """base, base2, base3, ... (or base, base_2, base_3 with separator "_")."""
+    yield base
+    for n in range(2, 1000):
+        yield f"{base}{separator}{n}"
+
 # Try to import xgboost (optional dependency)
 try:
     import xgboost as xgb
@@ -176,7 +217,10 @@ class TrainModelNode(BaseNode):
                             from the training split only and then applied to
                             validation, never the other way around.
                 - featureEngineering: Optional list of derived-feature specs, each a
-                            dict with: newColumnName (required), strategy
+                            dict with: newColumnName (required for
+                            "custom_expression"; optional otherwise - left
+                            empty, columns are named automatically, e.g.
+                            log_price, pca_1, poly_year^2, price_bin), strategy
                             ("custom_expression", "bin_numeric", "polynomial",
                             "log_transform", "quantile_transform",
                             "power_transform", or "pca"), plus strategy-specific
@@ -405,13 +449,22 @@ class TrainModelNode(BaseNode):
                 *ml_utils.COLUMN_TRANSFORM_STRATEGY_LABELS,
                 *_RETIRED_FE_STRATEGIES,
             ]
-            for item in feature_engineering:
-                if not isinstance(item, dict) or not item.get("newColumnName"):
+            for index, item in enumerate(feature_engineering):
+                if not isinstance(item, dict):
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
-                        error_detail="Each featureEngineering entry must be a dict with a 'newColumnName'",
+                        error_detail=f"Feature engineering #{index + 1} must be a dict",
                     )
                 strategy = item.get("strategy")
+                ref = _feature_ref(item, index)
+                if strategy == "custom_expression" and not item.get("newColumnName"):
+                    raise AppException(
+                        error_key=ErrorKey.INTERNAL_ERROR,
+                        error_detail=(
+                            f"Feature engineering #{index + 1} (Custom Expression) needs a New Column Name "
+                            "- a formula has no automatic name."
+                        ),
+                    )
                 if strategy not in valid_fe_strategies:
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
@@ -420,24 +473,24 @@ class TrainModelNode(BaseNode):
                 if strategy == "custom_expression" and not item.get("expression"):
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
-                        error_detail=f"featureEngineering entry '{item.get('newColumnName')}' has strategy 'custom_expression' but no expression",
+                        error_detail=f"Feature engineering {ref} has strategy 'custom_expression' but no expression",
                     )
                 if strategy == "bin_numeric" and (not item.get("binColumn") or not item.get("numBins")):
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
-                        error_detail=f"featureEngineering entry '{item.get('newColumnName')}' has strategy 'bin_numeric' but is missing binColumn or numBins",
+                        error_detail=f"Feature engineering {ref} has strategy 'bin_numeric' but is missing binColumn or numBins",
                     )
                 if strategy in ("normalize", "standardize") and not item.get("sourceColumns"):
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
-                        error_detail=f"featureEngineering entry '{item.get('newColumnName')}' has strategy '{strategy}' but no sourceColumns",
+                        error_detail=f"Feature engineering {ref} has strategy '{strategy}' but no sourceColumns",
                     )
                 if strategy in ml_utils.COLUMN_TRANSFORM_STRATEGY_LABELS:
-                    self._validate_column_transform_config(item)
+                    self._validate_column_transform_config(item, index)
                 if strategy == "polynomial" and (not item.get("polynomialColumns") or not item.get("polynomialDegree")):
                     raise AppException(
                         error_key=ErrorKey.INTERNAL_ERROR,
-                        error_detail=f"featureEngineering entry '{item.get('newColumnName')}' has strategy 'polynomial' but is missing polynomialColumns or polynomialDegree",
+                        error_detail=f"Feature engineering {ref} has strategy 'polynomial' but is missing polynomialColumns or polynomialDegree",
                     )
 
             if target_transform is not None:
@@ -921,12 +974,12 @@ class TrainModelNode(BaseNode):
             # keep behaving the same), but the user is told to move off them.
             training_warnings = [
                 (
-                    f"Feature engineering '{item.get('newColumnName')}' uses the retired "
+                    f"Feature engineering {_feature_ref(item, i)} uses the retired "
                     f"'{item.get('strategy')}' strategy. Scaling Method already rescales "
                     "numeric features (fit on the training split only), so this scales the "
                     "same values twice - switch the feature to another strategy or remove it."
                 )
-                for item in feature_engineering
+                for i, item in enumerate(feature_engineering)
                 if item.get("strategy") in _RETIRED_FE_STRATEGIES
             ]
             training_warnings = auto_fill_warnings + training_warnings
@@ -1269,7 +1322,7 @@ class TrainModelNode(BaseNode):
         """
         steps: List[Dict[str, Any]] = []
 
-        for item in feature_engineering:
+        for index, item in enumerate(feature_engineering):
             strategy = item.get("strategy")
             new_col = item.get("newColumnName")
 
@@ -1309,6 +1362,10 @@ class TrainModelNode(BaseNode):
                 if bin_column not in X_train.columns or not pd.api.types.is_numeric_dtype(X_train[bin_column]):
                     logger.warning(f"Skipping bin_numeric for '{new_col}': column '{bin_column}' not found or not numeric")
                     continue
+                if not new_col:
+                    new_col = _first_free_name(
+                        _numbered(f"{bin_column}_bin", "_"), lambda name: [name], X_train.columns
+                    )
                 _, bin_edges = pd.cut(X_train[bin_column], bins=num_bins, retbins=True, duplicates="drop")
                 X_train[new_col] = pd.cut(
                     X_train[bin_column], bins=bin_edges, labels=False, include_lowest=True
@@ -1331,8 +1388,15 @@ class TrainModelNode(BaseNode):
                     if c in X_train.columns and pd.api.types.is_numeric_dtype(X_train[c])
                 ]
                 column_stats: Dict[str, Dict[str, float]] = {}
+                auto = not new_col
+                if auto:
+                    new_col = _first_free_name(
+                        _numbered(_AUTO_NAME_PREFIXES[strategy]),
+                        lambda prefix: [f"{prefix}_{c}" for c in source_columns],
+                        X_train.columns,
+                    )
                 for col in source_columns:
-                    out_col = new_col if len(source_columns) == 1 else f"{new_col}_{col}"
+                    out_col = f"{new_col}_{col}" if auto or len(source_columns) > 1 else new_col
                     if strategy == "normalize":
                         min_val, max_val = X_train[col].min(), X_train[col].max()
                         if max_val == min_val:
@@ -1371,7 +1435,14 @@ class TrainModelNode(BaseNode):
                 # Skip the first len(poly_columns) outputs - those are just the
                 # original columns echoed back by PolynomialFeatures, already
                 # present in X_train/X_val.
-                new_names = [f"{new_col}_{n}" for n in poly_names[len(poly_columns):]]
+                combo_names = poly_names[len(poly_columns):]
+                if not new_col:
+                    new_col = _first_free_name(
+                        _numbered(_AUTO_NAME_PREFIXES["polynomial"]),
+                        lambda prefix: [f"{prefix}_{n}" for n in combo_names],
+                        X_train.columns,
+                    )
+                new_names = [f"{new_col}_{n}" for n in combo_names]
                 new_train_cols = pd.DataFrame(
                     train_poly[:, len(poly_columns):], columns=new_names, index=X_train.index
                 )
@@ -1391,22 +1462,22 @@ class TrainModelNode(BaseNode):
                 })
 
             elif strategy in ml_utils.COLUMN_TRANSFORM_STRATEGY_LABELS:
-                X_train, X_val, step = self._apply_column_transform(X_train, X_val, item)
+                X_train, X_val, step = self._apply_column_transform(X_train, X_val, item, index)
                 steps.append(step)
 
         return X_train, X_val, steps
 
     @staticmethod
-    def _validate_column_transform_config(item: Dict[str, Any]) -> None:
+    def _validate_column_transform_config(item: Dict[str, Any], index: int = 0) -> None:
         """Config checks for log/quantile/power/PCA features, before any data is loaded."""
         strategy = item.get("strategy")
         label = ml_utils.COLUMN_TRANSFORM_STRATEGY_LABELS[strategy]
-        name = item.get("newColumnName")
+        ref = _feature_ref(item, index)
 
         def fail(problem: str) -> None:
             raise AppException(
                 error_key=ErrorKey.INTERNAL_ERROR,
-                error_detail=f"Feature engineering '{name}' ({label}): {problem}",
+                error_detail=f"Feature engineering {ref} ({label}): {problem}",
             )
 
         columns = item.get("sourceColumns") or []
@@ -1437,7 +1508,7 @@ class TrainModelNode(BaseNode):
             if not isinstance(n_quantiles, int) or isinstance(n_quantiles, bool) or n_quantiles < 2:
                 fail(f"number of quantiles must be a whole number of 2 or more - got {n_quantiles!r}")
 
-    def _apply_column_transform(self, X_train, X_val, item):
+    def _apply_column_transform(self, X_train, X_val, item, index: int = 0):
         """Log Transform, Quantile Transformer, Power Transformer or PCA on
         numeric source columns.
 
@@ -1450,7 +1521,9 @@ class TrainModelNode(BaseNode):
 
         Output: one new column per source (named newColumnName for a single
         source, newColumnName_<source> for several), or newColumnName_1..k
-        for PCA. replaceSourceColumns (default: on for PCA, off otherwise)
+        for PCA. With no newColumnName, names are automatic: log_<source>,
+        quantile_<source>, power_<source> (even for one source), pca_1..k -
+        numbered log2_..., pca2_... if those are taken. replaceSourceColumns (default: on for PCA, off otherwise)
         removes the source columns from what the model is trained on - they
         are still collected as raw inputs at inference, since the transform
         needs them.
@@ -1458,13 +1531,14 @@ class TrainModelNode(BaseNode):
         strategy = item["strategy"]
         label = ml_utils.COLUMN_TRANSFORM_STRATEGY_LABELS[strategy]
         new_col = item.get("newColumnName")
+        ref = _feature_ref(item, index)
         columns = list(dict.fromkeys(item.get("sourceColumns") or []))
         power_method = item.get("powerMethod", "yeo-johnson")
 
         def fail(problem: str) -> None:
             raise AppException(
                 error_key=ErrorKey.INTERNAL_ERROR,
-                error_detail=f"Feature engineering '{new_col}' ({label}): {problem}",
+                error_detail=f"Feature engineering {ref} ({label}): {problem}",
             )
 
         not_found = [c for c in columns if c not in X_train.columns]
@@ -1526,15 +1600,26 @@ class TrainModelNode(BaseNode):
             name: ml_utils.apply_column_transform(strategy, transformer, values)
             for name, values in matrices.items()
         }
-        if strategy == "pca":
-            output_columns = [f"{new_col}_{i + 1}" for i in range(transformed["training"].shape[1])]
-        elif len(columns) == 1:
-            output_columns = [new_col]
-        else:
-            output_columns = [f"{new_col}_{c}" for c in columns]
+        n_outputs = transformed["training"].shape[1]
+
+        def names_for(prefix: str, auto: bool) -> List[str]:
+            if strategy == "pca":
+                return [f"{prefix}_{i + 1}" for i in range(n_outputs)]
+            if len(columns) == 1 and not auto:
+                return [prefix]
+            return [f"{prefix}_{c}" for c in columns]
 
         replace = bool(item.get("replaceSourceColumns", strategy == "pca"))
         kept_columns = [c for c in X_train.columns if not (replace and c in columns)]
+        if not new_col:
+            new_col = _first_free_name(
+                _numbered(_AUTO_NAME_PREFIXES[strategy]),
+                lambda prefix: names_for(prefix, auto=True),
+                kept_columns,
+            )
+            output_columns = names_for(new_col, auto=True)
+        else:
+            output_columns = names_for(new_col, auto=False)
         clashes = [c for c in output_columns if c in kept_columns]
         if clashes:
             fail(f"output column(s) {clashes} already exist - choose another New Column Name")

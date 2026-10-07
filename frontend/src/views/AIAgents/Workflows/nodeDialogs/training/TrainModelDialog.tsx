@@ -236,6 +236,21 @@ export const TrainModelDialog: React.FC<TrainModelDialogProps> = (props) => {
       return;
     }
 
+    // Only Custom Expression needs a name - other strategies name their
+    // columns automatically - so catch a missing one here instead of failing
+    // the training run.
+    const unnamedExpression = (values.featureEngineering || []).findIndex(
+      (f) => f.strategy === "custom_expression" && !(f.newColumnName || "").trim()
+    );
+    if (unnamedExpression !== -1) {
+      toast({
+        title: "Validation Error",
+        description: `Feature #${unnamedExpression + 1} (Custom Expression): enter a New Column Name`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (values.splitMethod === "time_based" && !values.dateColumn.trim()) {
       toast({
         title: "Validation Error",
@@ -974,6 +989,7 @@ export const TrainModelDialog: React.FC<TrainModelDialogProps> = (props) => {
                     }}
                     analysisResult={values.analysisResult}
                     targetColumn={values.targetColumn}
+                    featureColumns={values.featureColumns}
                     onChange={(config: FeatureEngineeringConfig) =>
                       setField("featureEngineering", config.features)
                     }
